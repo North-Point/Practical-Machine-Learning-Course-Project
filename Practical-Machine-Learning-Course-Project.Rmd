@@ -1,0 +1,126 @@
+---
+title: 'Practical Machine Learning: Course Project'
+author: "Yue Yin"
+date: "August 11, 2016"
+output: html_document
+---
+### Executive Summary
+This study aims to build a model predicting how well people do a particular activity, using data from accelermeters on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in five different ways. We use several machine learning algorithms to complete the study: decision tree, boosting and random forest and tune the parameters using cross-validation. By comparing the estimated out-of-sample error of all the models, we finally pick random forest as our submitted model. The accuracy of our final model on 20-points test set is 100%.
+
+
+### Load Data
+```{r, message=FALSE}
+library(caret)
+library(dplyr)
+library(rpart)
+library(rpart.plot)
+library(RColorBrewer)
+setwd("/Users/North_Point/Dropbox/MOOC/Data_Science/Practical Machine Learning")
+if(!dir.exists("./data")){
+        dir.create("./data")
+}
+training.url = "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testing.url = "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+download.file(training.url, "./data/training.csv", method = "curl")
+download.file(testing.url, "./data/testing.csv", method = "curl")
+
+training.raw.data = read.csv("./data/training.csv", na.strings=c("NA",""), header=TRUE)
+testing.raw.data = read.csv("./data/testing.csv", na.strings=c("NA",""), header=TRUE)
+training.raw.data.outcome = training.raw.data$classe
+```
+
+### Preprocess the data: Remove redunant variables
+
+Delete the redunant variables: rownum, user_name, problem_id. Also I remove all timestamp variables. Because it makes no sense that the prediction of quality should depend on time.
+
+```{r}
+training.data = subset(training.raw.data, select = -c(X, user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp))
+testing.data = subset(testing.raw.data, select = -c(X,user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp, problem_id))
+```
+
+### Preprocess the data: Remove variables with more than 75% NAs
+
+```{r}
+mostlyNA = sapply(training.data, function(x) mean(is.na(x)) > 0.75)
+training.data = training.data[, mostlyNA == F]
+```
+
+
+### Proprocess the data: Remove near zero variance varibles
+
+```{r}
+zerovar.check = nearZeroVar(subset(training.data, select = -classe),saveMetrics=TRUE)
+zerovar.ind = zerovar.check$zeroVar | zerovar.check$nzv
+names.nonzerovar = rownames(zerovar.check)[!zerovar.ind]
+training.data = training.data[c(names.nonzerovar, "classe")]
+```
+
+### Preprocess the data: Remove highly correlated variables (correlation > 0.9)
+```{r}
+highcorr.cols = findCorrelation(abs(cor(subset(training.data, select = -classe))), 0.9)
+training.data = training.data[, -highcorr.cols]
+```
+
+
+### Preprocess the data: Impute the missing value using KNN
+```{r}
+preProc = preProcess(subset(training.data, select = -classe), method = c("knnImpute"))
+training.pre = predict(preProc, newdata = subset(training.data, select = -classe))
+testing.pre = predict(preProc, newdata = testing.data)
+training.data = cbind(training.pre, classe = training.raw.data.outcome)
+testing.data = testing.pre
+```
+
+### Data Slicing: Prepare for validation
+
+```{r}
+set.seed(85)
+inSample = createDataPartition( y = training.data$classe, p = 0.6, list = F)
+training.data.insample = training.data[inSample,]
+training.data.outsample = training.data[-inSample,]
+```
+
+### Model Developing: Decision tree, boosting and random forest
+
+Here I use 5-fold cross validation to tune the parameters
+
+```{r}
+fitControl = trainControl(## 5-fold CV
+        method = "cv",
+        number = 5)
+set.seed(819)
+model.tree = train(classe ~ ., data = training.data.insample, method = "rpart", trControl = fitControl)
+model.gbm = train(classe ~ ., data = training.data.insample, method = "gbm", trControl = fitControl, verbose = F)
+model.rf = train(classe ~ ., data = training.data.insample, method = "rf", trControl = fitControl, verbose = F)
+```
+
+
+### Out-of-sample Error Estimate: Estimate out-of-sample error using validation data
+
+```{r}
+tree.predict = predict(model.tree, newdata = training.data.outsample)
+tree.conf = confusionMatrix(training.data.outsample$classe, tree.predict)
+tree.conf
+
+gbm.predict = predict(model.gbm, newdata = training.data.outsample)
+gbm.conf = confusionMatrix(training.data.outsample$classe, gbm.predict)
+gbm.conf
+
+rf.predict = predict(model.rf, newdata = training.data.outsample)
+rf.conf = confusionMatrix(training.data.outsample$classe, rf.predict)
+rf.conf
+
+all.accuracy = data.frame(tree = tree.conf$overall[1], gbm = gbm.conf$overall[1], rf = rf.conf$overall[1])
+print(all.accuracy)
+```
+
+By comparing the overall accuracy of all three tuned models, we see random forest has the best performance. Therefore we this as our submitted model.
+
+```{r}
+submit.pred = predict(model.rf, newdata = testing.data)
+submit.pred
+```
+
+According to the grades of quiz 4. This model runs 100% correctly on the test data.
+
